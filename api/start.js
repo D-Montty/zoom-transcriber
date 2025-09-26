@@ -19,28 +19,23 @@ export default async function handler(req, res) {
 
     const BASE = `https://${REGION}.recall.ai/api/v1`;
 
-    // Build a public webhook URL if available (recommended by docs for real-time)
-    // Set PUBLIC_BASE_URL in Vercel (e.g., https://your-app.vercel.app)
+    // Public URL so Recall can POST webhook events.
+    // Set PUBLIC_BASE_URL in Vercel, e.g., https://your-app.vercel.app
     const publicBase = process.env.PUBLIC_BASE_URL;
     let webhookUrl = null;
-
     if (publicBase && /^https?:\/\//i.test(publicBase)) {
       webhookUrl = `${publicBase.replace(/\/+$/, "")}/api/recall/transcript`;
     } else if (req.headers?.host && !/^localhost|127\.0\.0\.1/.test(req.headers.host)) {
-      // Fallback: try to infer from request host in production
       webhookUrl = `https://${req.headers.host}/api/recall/transcript`;
     }
 
     const payload = {
       meeting_url: zoom_url,
       name: display_name || "Sales Notetaker",
-      // Per docs: include a transcript artifact with a provider,
-      // and (optionally) a real-time endpoint that listens for transcript events.
+      // Per docs: enable real-time transcription via recallai_streaming
       recording_config: {
         transcript: {
-          provider: {
-            recallai_streaming: {}
-          }
+          provider: { recallai_streaming: {} }
         },
         ...(webhookUrl
           ? {
@@ -48,8 +43,8 @@ export default async function handler(req, res) {
                 {
                   type: "webhook",
                   url: webhookUrl,
-                  // Include partials for lower latency updates
-                  events: ["transcript.data", "transcript.partial_data"]
+                  // stream both partial and finalized chunks
+                  events: ["transcript.partial_data", "transcript.data"]
                 }
               ]
             }
@@ -71,7 +66,7 @@ export default async function handler(req, res) {
       return res.status(resp.status).json({ error: "Failed to create bot", details });
     }
 
-    const data = await resp.json(); // contains data.id (bot_id)
+    const data = await resp.json(); // includes data.id
     return res.status(200).json({
       success: true,
       bot_id: data.id,
