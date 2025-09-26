@@ -1,4 +1,5 @@
 export default async function handler(req, res) {
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -22,9 +23,24 @@ export default async function handler(req, res) {
     }
 
     const data = await r.json();
-    const text = (data?.utterances || [])
-      .map(u => (u.speaker ? `${u.speaker}: ${u.text}` : u.text))
-      .join("\n");
+
+    // Be flexible with response shapes:
+    //  - Some versions return an ARRAY of blocks with words[]
+    //  - Others return an OBJECT with utterances[]
+    let text = "";
+
+    if (Array.isArray(data)) {
+      // e.g. [{ speaker, words: [{text,...}, ...] }, ...]
+      text = data.map(block => {
+        const line = (block.words || []).map(w => w.text).join(" ");
+        return block.speaker ? `${block.speaker}: ${line}` : line;
+      }).join("\n");
+    } else if (data?.utterances) {
+      // e.g. { utterances: [{speaker, text}, ...] }
+      text = data.utterances.map(u =>
+        (u.speaker ? `${u.speaker}: ${u.text}` : u.text)
+      ).join("\n");
+    }
 
     return res.status(200).json({ success: true, transcript: text || "" });
   } catch (err) {
