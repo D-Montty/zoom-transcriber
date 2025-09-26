@@ -14,7 +14,7 @@ export default async function handler(req, res) {
     const API_KEY = process.env.RECALL_API_KEY;
     const BASE = `https://${REGION}.recall.ai/api/v1`;
 
-    // Tell bot to leave immediately
+    // Leave call now
     const stop = await fetch(`${BASE}/bot/${bot_id}/leave_call/`, {
       method: "POST",
       headers: { "Authorization": `Token ${API_KEY}` }
@@ -25,7 +25,7 @@ export default async function handler(req, res) {
       return res.status(stop.status).json({ error: "Failed to stop bot", details: text });
     }
 
-    // Fetch the final transcript once more
+    // Final transcript fetch
     const r = await fetch(`${BASE}/bot/${bot_id}/transcript/`, {
       headers: { "Authorization": `Token ${API_KEY}` }
     });
