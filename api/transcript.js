@@ -24,19 +24,14 @@ export default async function handler(req, res) {
 
     const data = await r.json();
 
-    // Be flexible with response shapes:
-    //  - Some versions return an ARRAY of blocks with words[]
-    //  - Others return an OBJECT with utterances[]
+    // Handle both array-of-blocks and object-with-utterances shapes
     let text = "";
-
     if (Array.isArray(data)) {
-      // e.g. [{ speaker, words: [{text,...}, ...] }, ...]
       text = data.map(block => {
         const line = (block.words || []).map(w => w.text).join(" ");
         return block.speaker ? `${block.speaker}: ${line}` : line;
       }).join("\n");
     } else if (data?.utterances) {
-      // e.g. { utterances: [{speaker, text}, ...] }
       text = data.utterances.map(u =>
         (u.speaker ? `${u.speaker}: ${u.text}` : u.text)
       ).join("\n");
