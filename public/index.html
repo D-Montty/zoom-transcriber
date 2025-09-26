@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Sales Call Transcriber</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>📝 Sales Call Transcriber</h1>
+      <p>Paste a Zoom link, start, stop, and copy the transcript.</p>
+    </header>
+
+    <div class="card">
+      <label>Your Name</label>
+      <input id="name" placeholder="e.g., Diego"/>
+
+      <label style="margin-top:12px;">Zoom Meeting Link</label>
+      <input id="zoom" placeholder="https://zoom.us/j/123..."/>
+
+      <div class="buttons">
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <button id="copyBtn" disabled>Copy</button>
+      </div>
+
+      <div id="status" class="status"></div>
+    </div>
+
+    <div class="card" id="txCard" style="display:none;">
+      <div class="row">
+        <h2>Live Transcript</h2>
+        <span id="duration"></span>
+      </div>
+      <pre id="tx">Waiting for audio…</pre>
+    </div>
+
+    <footer>
+      💡 If Zoom shows a participant trying to join, please **Admit** it.
+    </footer>
+  </div>
+
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn  = document.getElementById('stopBtn');
+    const copyBtn  = document.getElementById('copyBtn');
+    const statusEl = document.getElementById('status');
+    const txEl     = document.getElementById('tx');
+    const txCard   = document.getElementById('txCard');
+    const durEl    = document.getElementById('duration');
+
+    let botId = null, poll = null, t0 = null, timer = null;
+
+    function setStatus(msg, type="info"){
+      statusEl.textContent = msg;
+      statusEl.className = `status ${type}`;
+      if(type!=="error") setTimeout(()=>statusEl.textContent="", 3500);
+    }
+
+    function setButtons({starting=false, running=false}){
+      startBtn.disabled = starting || running;
+      stopBtn.disabled  = !running;
+      copyBtn.disabled  = !running;
+    }
+
+    async function start(){
+      const name = document.getElementById('name').value.trim();
+      const zoom = document.getElementById('zoom').value.trim();
+      if(!zoom){ setStatus("Please paste a Zoom meeting link", "error"); return; }
+
+      setButtons({starting:true, running:false});
+      setStatus("Starting bot… admit it in Zoom if prompted.");
+      try{
+        const r = await fetch("/api/start", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ zoom_url: zoom, display_name: name })
+        });
+        const data = await r.json();
+        if(!r.ok) throw new Error(data.error || "Failed to start");
+
+        botId = data.bot_id;
+        txCard.style.display = "block";
+        txEl.textContent = "Waiting for audio…";
+        setButtons({running:true});
+        t0 = Date.now();
+        timer = setInterval(()=>{
+          const s = Math.floor((Date.now()-t0)/1000);
+          const m = String(Math.floor(s/60)).padStart(2,"0");
+          const ss = String(s%60).padStart(2,"0");
+          durEl.textContent = `Duration ${m}:${ss}`;
+        }, 1000);
+
+        // Poll transcript every 3s (Get Bot Transcript returns "so-far")
+        poll = setInterval(async ()=>{
+          const rr = await fetch(`/api/transcript?bot_id=${botId}`);
+          if(!rr.ok) return;
+          const td = await rr.json();
+          if(typeof td.transcript === "string"){
+            txEl.textContent = td.transcript || "(no speech yet)";
+            txEl.scrollTop = txEl.scrollHeight;
+          }
+        }, 3000);
+      }catch(e){
+        setStatus(e.message, "error");
+        setButtons({starting:false, running:false});
+      }
+    }
+
+    async function stop(){
+      if(!botId) return;
+      setStatus("Stopping…");
+      setButtons({starting:false, running:false});
+      try{
+        const r = await fetch("/api/stop", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ bot_id: botId })
+        });
+        const data = await r.json();
+        if(!r.ok) throw new Error(data.error || "Failed to stop");
+        if(typeof data.transcript === "string"){
+          txEl.textContent = data.transcript || txEl.textContent;
+        }
+      }catch(e){
+        setStatus(e.message, "error");
+      }finally{
+        botId = null;
+        if(poll){ clearInterval(poll); poll = null; }
+        if(timer){ clearInterval(timer); timer = null; durEl.textContent=""; }
+        setButtons({starting:false, running:false});
+        setStatus("Stopped. Transcript ready to copy.", "success");
+      }
+    }
+
+    function copy(){
+      const text = txEl.textContent || "";
+      if(!text.trim()){ setStatus("Nothing to copy", "error"); return; }
+      navigator.clipboard.writeText(text).then(
+        ()=> setStatus("Transcript copied!", "success"),
+        ()=> setStatus("Copy failed", "error")
+      );
+    }
+
+    startBtn.onclick = start;
+    stopBtn.onclick  = stop;
+    copyBtn.onclick  = copy;
+
+    document.addEventListener("keydown", e=>{
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); if(!startBtn.disabled) start(); }
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="x"){ e.preventDefault(); if(!stopBtn.disabled)  stop(); }
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="c"){ e.preventDefault(); if(!copyBtn.disabled)  copy(); }
+    });
+  </script>
+</body>
+</html>
