@@ -1,4 +1,5 @@
 export default async function handler(req, res) {
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -13,8 +14,8 @@ export default async function handler(req, res) {
     const API_KEY = process.env.RECALL_API_KEY;
     const BASE = `https://${REGION}.recall.ai/api/v1`;
 
-    // Create Bot: joins Zoom + enables real-time transcription
-    // Bots do not transcribe by default; we set recording_config.transcript.provider. :contentReference[oaicite:3]{index=3}
+    // Create Bot with REAL-TIME transcription enabled
+    // "prioritize_low_latency" gives snappier live updates (English).
     const create = await fetch(`${BASE}/bot/`, {
       method: "POST",
       headers: {
@@ -24,10 +25,10 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         meeting_url: zoom_url,
         name: display_name || "Sales Notetaker",
-        recording_config: {
-          transcript: {
-            provider: { recallai_streaming: {} }
-          }
+        transcription_options: {
+          provider: "recallai",
+          mode: "prioritize_low_latency",
+          language_code: "en"
         }
       })
     });
