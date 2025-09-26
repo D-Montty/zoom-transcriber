@@ -1,0 +1,19 @@
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh;margin:0;padding:24px}
+.container{max-width:900px;margin:0 auto}
+header{color:#fff;text-align:center;margin-bottom:20px}
+.card{background:#fff;border-radius:12px;padding:22px;box-shadow:0 12px 28px rgba(0,0,0,.12);margin-bottom:16px}
+label{display:block;font-weight:600;margin-bottom:6px}
+input{width:100%;padding:12px;border:2px solid #e6e6e6;border-radius:8px;font-size:16px}
+.buttons{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+button{border:0;padding:12px 20px;border-radius:8px;font-weight:700;cursor:pointer}
+#startBtn{background:#667eea;color:#fff}
+#stopBtn{background:#f56565;color:#fff}
+#copyBtn{background:#48bb78;color:#fff}
+.status{margin-top:12px;padding:10px;border-radius:8px;background:#bee3f8;color:#2c5282}
+.status.error{background:#fed7d7;color:#742a2a}
+.status.success{background:#c6f6d5;color:#22543d}
+#txCard{max-height:520px;overflow:auto}
+.row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+#tx{background:#f7f7f9;border-radius:8px;padding:16px;white-space:pre-wrap}
+footer{color:#fff;text-align:center;margin-top:12px;opacity:.9}
