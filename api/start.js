@@ -1,3 +1,4 @@
+// api/start.js
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -12,70 +13,65 @@ export default async function handler(req, res) {
 
     const REGION = process.env.RECALL_REGION;      // e.g. "us-east-1"
     const API_KEY = process.env.RECALL_API_KEY;
+    if (!REGION || !API_KEY) {
+      return res.status(500).json({ error: "Missing RECALL_REGION or RECALL_API_KEY env vars" });
+    }
+
     const BASE = `https://${REGION}.recall.ai/api/v1`;
 
-    // --- Attempt 1: real-time transcription via transcription_options (low-latency)
-    const payload1 = {
+    // Build a public webhook URL if available (recommended by docs for real-time)
+    // Set PUBLIC_BASE_URL in Vercel (e.g., https://your-app.vercel.app)
+    const publicBase = process.env.PUBLIC_BASE_URL;
+    let webhookUrl = null;
+
+    if (publicBase && /^https?:\/\//i.test(publicBase)) {
+      webhookUrl = `${publicBase.replace(/\/+$/, "")}/api/recall/transcript`;
+    } else if (req.headers?.host && !/^localhost|127\.0\.0\.1/.test(req.headers.host)) {
+      // Fallback: try to infer from request host in production
+      webhookUrl = `https://${req.headers.host}/api/recall/transcript`;
+    }
+
+    const payload = {
       meeting_url: zoom_url,
       name: display_name || "Sales Notetaker",
-      transcription_options: {
-        provider: "recallai",
-        mode: "prioritize_low_latency", // faster live updates (English)
-        language_code: "en"
+      // Per docs: include a transcript artifact with a provider,
+      // and (optionally) a real-time endpoint that listens for transcript events.
+      recording_config: {
+        transcript: {
+          provider: {
+            recallai_streaming: {}
+          }
+        },
+        ...(webhookUrl
+          ? {
+              realtime_endpoints: [
+                {
+                  type: "webhook",
+                  url: webhookUrl,
+                  // Include partials for lower latency updates
+                  events: ["transcript.data", "transcript.partial_data"]
+                }
+              ]
+            }
+          : {})
       }
     };
 
-    let create = await fetch(`${BASE}/bot/`, {
+    const resp = await fetch(`${BASE}/bot/`, {
       method: "POST",
       headers: {
         "Authorization": `Token ${API_KEY}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify(payload1)
+      body: JSON.stringify(payload)
     });
 
-    // If Attempt 1 failed (some accounts/versions differ), try a fallback schema.
-    if (!create.ok) {
-      const errText = await create.text();
-
-      // Only retry on 4xx schema issues; pass through 401/403 etc.
-      if (create.status >= 400 && create.status < 500 && create.status !== 401 && create.status !== 403) {
-        const payload2 = {
-          meeting_url: zoom_url,
-          name: display_name || "Sales Notetaker",
-          // Older config style some accounts expect:
-          recording_config: {
-            transcript: { provider: { recallai_streaming: {} } }
-          }
-        };
-
-        create = await fetch(`${BASE}/bot/`, {
-          method: "POST",
-          headers: {
-            "Authorization": `Token ${API_KEY}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload2)
-        });
-
-        if (!create.ok) {
-          const errText2 = await create.text();
-          return res.status(create.status).json({
-            error: "Failed to create bot",
-            details: errText2 || errText
-          });
-        }
-      } else {
-        // Auth/permission/region errors, just return the original error.
-        return res.status(create.status).json({
-          error: "Failed to create bot",
-          details: errText
-        });
-      }
+    if (!resp.ok) {
+      const details = await resp.text();
+      return res.status(resp.status).json({ error: "Failed to create bot", details });
     }
 
-    const data = await create.json(); // contains data.id (bot_id)
-
+    const data = await resp.json(); // contains data.id (bot_id)
     return res.status(200).json({
       success: true,
       bot_id: data.id,
