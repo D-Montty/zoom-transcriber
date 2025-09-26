@@ -93,21 +93,33 @@
           durEl.textContent = `Duration ${m}:${ss}`;
         }, 1000);
 
-        // Poll transcript every 3s (Get Bot Transcript returns "so-far")
-        poll = setInterval(async ()=>{
-          const rr = await fetch(`/api/transcript?bot_id=${botId}`);
-          if(!rr.ok) return;
-          const td = await rr.json();
-          if(typeof td.transcript === "string"){
-            txEl.textContent = td.transcript || "(no speech yet)";
-            txEl.scrollTop = txEl.scrollHeight;
-          }
-        }, 3000);
-      }catch(e){
-        setStatus(e.message, "error");
-        setButtons({starting:false, running:false});
+        // Poll every 3s: try live cache first, then fallback to GET /transcript
+poll = setInterval(async () => {
+  if (!botId) return;
+
+  try {
+    // 1) Live via webhook cache
+    const live = await fetch(`/api/live?bot_id=${botId}`);
+    if (live.ok) {
+      const ld = await live.json();
+      if (ld.hasData && typeof ld.transcript === "string") {
+        txEl.textContent = ld.transcript;
+        txEl.scrollTop = txEl.scrollHeight;
+        return; // got live text, no need to hit REST fallback this tick
       }
     }
+
+    // 2) Fallback to REST transcript (may be empty until post-call)
+    const rest = await fetch(`/api/transcript?bot_id=${botId}`);
+    if (rest.ok) {
+      const rd = await rest.json();
+      if (rd.transcript && rd.transcript.trim()) {
+        txEl.textContent = rd.transcript;
+        txEl.scrollTop = txEl.scrollHeight;
+      }
+    }
+  } catch (_) {}
+}, 3000);
 
     async function stop(){
       if(!botId) return;
