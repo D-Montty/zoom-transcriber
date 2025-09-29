@@ -18,7 +18,7 @@ export default async function handler(req, res) {
     console.log(`[STOP] Stopping bot ${bot_id}...`);
 
     // Leave call
-    const stop = await fetch(`${BASE}/bot/${bot_id}/leave_call/`, {
+    const stop = await fetch(`${BASE}/bot/${bot_id}/leave_call`, {
       method: "POST",
       headers: { "Authorization": `Token ${API_KEY}` }
     });
@@ -35,8 +35,11 @@ export default async function handler(req, res) {
     // The client will poll for it
     let finalText = "";
     try {
-      const r = await fetch(`${BASE}/bot/${bot_id}/transcript/`, {
-        headers: { "Authorization": `Token ${API_KEY}` }
+      const r = await fetch(`${BASE}/bot/${bot_id}/transcript`, {
+        headers: { 
+          "Authorization": `Token ${API_KEY}`,
+          "Accept": "application/json"
+        }
       });
 
       if (r.ok) {
