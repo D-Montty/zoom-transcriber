@@ -1,4 +1,4 @@
-// api/recall/transcript.js
+// api/recall/transcript.js - FIXED for nested webhook structure
 // Webhook endpoint that receives real-time transcript from Recall.ai
 
 const liveCache = globalThis.__liveCache || (globalThis.__liveCache = new Map());
@@ -39,36 +39,25 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true }); // Still return 200 to avoid retries
     }
 
-    // Log the FULL webhook payload structure to debug
-    console.log(`[WEBHOOK] ===== RAW WEBHOOK RECEIVED =====`);
-    console.log(`[WEBHOOK] Full payload:`, JSON.stringify(body, null, 2));
+    const event = body.event || "unknown";
     
-    // Try multiple ways to extract bot_id
-    const botId = 
-      body?.bot_id || 
-      body?.bot?.id || 
-      body?.id || 
-      body?.data?.bot_id ||
-      body?.data?.bot?.id;
+    // Extract bot_id from the nested structure: body.data.bot.id
+    const botId = body?.data?.bot?.id;
     
-    const event = body.event || body.type || "unknown";
-    
-    console.log(`[WEBHOOK] Extracted - Event: ${event}, BotId: ${botId}`);
+    console.log(`[WEBHOOK] Event: ${event}, BotId: ${botId}`);
 
-    // Extract text from various possible structures
-    const d = body.data || body;
-    const line =
-      wordsToLine(d?.words) ||
-      wordsToLine(d?.segment?.words) ||
-      d?.text || 
-      "";
+    // Extract words from nested structure: body.data.data.words
+    const words = body?.data?.data?.words || [];
+    const participant = body?.data?.data?.participant?.name || "Unknown Speaker";
+    
+    // Convert words array to text
+    const line = wordsToLine(words);
 
     if (botId && line && line.trim()) {
       const entry = liveCache.get(botId) || { lines: [], text: "", updated: 0 };
       
-      // Add speaker if available
-      const speaker = d?.speaker || d?.segment?.speaker || "";
-      const formattedLine = speaker ? `${speaker}: ${line.trim()}` : line.trim();
+      // Add speaker prefix to this line
+      const formattedLine = `${participant}: ${line.trim()}`;
       
       entry.lines.push(formattedLine);
       entry.text = entry.lines.join("\n");
@@ -76,9 +65,10 @@ export default async function handler(req, res) {
       
       liveCache.set(botId, entry);
       
-      console.log(`[WEBHOOK] Updated cache for bot ${botId}: ${entry.lines.length} lines, ${entry.text.length} chars`);
+      console.log(`[WEBHOOK] ✅ Cached for bot ${botId}: ${words.length} words, "${line.substring(0, 50)}..."`);
+      console.log(`[WEBHOOK] Total cache: ${entry.lines.length} lines, ${entry.text.length} chars`);
     } else {
-      console.log(`[WEBHOOK] No usable text in webhook. BotId: ${botId}, Line: "${line}"`);
+      console.log(`[WEBHOOK] ⚠️ Skipped - BotId: ${botId}, Words: ${words.length}, Line: "${line}"`);
     }
 
     // Always return 200 OK so Recall stops retrying
@@ -86,7 +76,8 @@ export default async function handler(req, res) {
       ok: true, 
       event, 
       bot_id: botId,
-      processed: !!(botId && line && line.trim())
+      processed: !!(botId && line && line.trim()),
+      words_count: words.length
     });
 
   } catch (err) {
