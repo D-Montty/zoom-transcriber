@@ -1,79 +1,121 @@
-// api/stop.js
-export default async function handler(req, res) {
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+# ✅ FIXED - New Recall.ai API Implementation
 
-  try {
-    const { bot_id } = req.body || {};
-    if (!bot_id) return res.status(400).json({ error: "bot_id is required" });
+## **What Was Wrong:**
+Recall.ai completely changed their API structure. The old `/bot/{id}/transcript/` endpoint is deprecated.
 
-    const REGION = process.env.RECALL_REGION;
-    const API_KEY = process.env.RECALL_API_KEY;
-    const BASE = `https://${REGION}.recall.ai/api/v1`;
+## **New API Flow:**
 
-    console.log(`[STOP] Stopping bot ${bot_id}...`);
+### **Old Way (Deprecated):**
+```
+GET /bot/{bot_id}/transcript/  ❌ Returns "legacy endpoint" error
+```
 
-    // Leave call
-    const stop = await fetch(`${BASE}/bot/${bot_id}/leave_call`, {
-      method: "POST",
-      headers: { "Authorization": `Token ${API_KEY}` }
-    });
+### **New Way (Correct):**
+```
+1. GET /bot/{bot_id}  → Get bot info
+2. Extract: recordings[0].media_shortcuts.transcript.data.download_url
+3. GET download_url  → Get actual transcript
+```
 
-    if (!stop.ok) {
-      const text = await stop.text();
-      console.error(`[STOP] Failed to stop bot: ${text}`);
-      return res.status(stop.status).json({ error: "Failed to stop bot", details: text });
-    }
+---
 
-    console.log(`[STOP] Bot ${bot_id} left the call successfully`);
+## **🔧 Files That MUST Be Updated:**
 
-    // Try to fetch transcript, but don't fail if it's not ready yet
-    // The client will poll for it
-    let finalText = "";
-    try {
-      const r = await fetch(`${BASE}/bot/${bot_id}/transcript`, {
-        headers: { 
-          "Authorization": `Token ${API_KEY}`,
-          "Accept": "application/json"
-        }
-      });
+### **1. api/transcript.js** ✅ Updated
+- Now fetches bot info first
+- Extracts download URL from recordings
+- Downloads and formats transcript
 
-      if (r.ok) {
-        const data = await r.json();
-        console.log(`[STOP] Transcript response type:`, Array.isArray(data) ? 'array' : typeof data);
-        
-        if (Array.isArray(data)) {
-          finalText = data.map(block => {
-            const line = (block.words || []).map(w => w.text).join(" ");
-            return block.speaker ? `${block.speaker}: ${line}` : line;
-          }).join("\n");
-        } else if (data?.utterances) {
-          finalText = data.utterances.map(u =>
-            (u.speaker ? `${u.speaker}: ${u.text}` : u.text)
-          ).join("\n");
-        }
-        
-        console.log(`[STOP] Transcript length: ${finalText.length} chars`);
-      } else {
-        console.log(`[STOP] Transcript not ready yet (status ${r.status})`);
-      }
-    } catch (err) {
-      console.error(`[STOP] Error fetching transcript:`, err.message);
-    }
+### **2. api/stop.js** ✅ Updated
+- Stops the bot (leave_call)
+- Attempts to fetch transcript using new API
+- Returns transcript if ready, or empty if processing
 
-    return res.status(200).json({
-      success: true,
-      message: "Recording stopped. Transcript may take 30-60 seconds to process.",
-      transcript: finalText || "",
-      note: finalText ? "Transcript ready" : "Transcript still processing - poll /api/transcript"
-    });
+### **3. api/start.js** ✅ Already correct
+- No changes needed (already uses correct endpoint)
 
-  } catch (err) {
-    console.error(`[STOP] Unexpected error:`, err);
-    return res.status(500).json({ error: "Internal error", message: err.message });
-  }
-}
+### **4. api/live.js** ✅ No changes needed
+- Works with in-memory cache
+
+### **5. api/recall/transcript.js** ⚠️ Needs attention
+- Webhooks are being received but `bot_id` is undefined
+- Need to see the actual webhook payload structure
+
+---
+
+## **🚀 Deploy These 2 Updated Files:**
+
+**Priority files to update:**
+1. ✅ `api/transcript.js` (see artifact above)
+2. ✅ `api/stop.js` (see artifact above)
+
+---
+
+## **📋 After Deploying:**
+
+### **Test and Check Logs For:**
+
+#### ✅ Good Signs:
+```
+[TRANSCRIPT] Bot state: done
+[TRANSCRIPT] Recordings count: 1
+[TRANSCRIPT] Download URL found, fetching transcript...
+[TRANSCRIPT] Downloaded 15 transcript blocks
+[TRANSCRIPT] Final transcript: 2453 chars
+```
+
+#### ❌ If you still see:
+```
+[TRANSCRIPT] API error (400): ["This is a legacy endpoint..."]
+```
+Then the file didn't deploy correctly.
+
+---
+
+## **⚠️ Webhook Issue Still Exists:**
+
+Your logs show:
+```
+[WEBHOOK] No usable text in webhook. BotId: undefined
+```
+
+This means webhooks ARE being received, but we're not extracting the `bot_id` correctly from the payload.
+
+### **To Debug Webhooks:**
+
+After deploying the transcript fixes, let's focus on webhooks:
+
+1. **Check if enhanced logging is working** - Look for:
+   ```
+   [WEBHOOK] ===== RAW WEBHOOK RECEIVED =====
+   [WEBHOOK] Full payload: { ... }
+   ```
+
+2. **Share the full webhook payload** from logs so I can see the exact structure
+
+3. **For now, the POST-CALL transcript should work** even if live webhooks don't
+
+---
+
+## **💡 Why This Will Work:**
+
+The transcript fetching after stopping should now work because:
+- We're using the correct `/bot/{bot_id}` endpoint (no trailing slash)
+- We're following the new API flow: bot info → extract URL → download transcript
+- This is the official Recall.ai API as documented
+
+---
+
+## **🎯 Next Steps:**
+
+1. **Deploy the 2 updated files** (`transcript.js` and `stop.js`)
+2. **Test a full recording cycle**:
+   - Start bot
+   - Talk for 30 seconds
+   - Stop bot
+   - Wait 30-60 seconds
+   - Click "Refresh Transcript" button
+3. **Check Vercel logs** for the new log messages
+4. **Share results** so we can fix the webhook `bot_id` extraction next
+
+The transcript should now work after the call ends! 🎉
