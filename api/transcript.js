@@ -20,7 +20,7 @@ export default async function handler(req, res) {
     console.log(`[TRANSCRIPT] Fetching transcript for bot: ${bot_id}`);
 
     // Get bot state
-    const s = await fetch(`${BASE}/bot/${bot_id}/`, {
+    const s = await fetch(`${BASE}/bot/${bot_id}`, {
       headers: { "Authorization": `Token ${API_KEY}` }
     });
     
@@ -29,9 +29,12 @@ export default async function handler(req, res) {
     
     console.log(`[TRANSCRIPT] Bot state: ${state}`);
 
-    // Get transcript
-    const r = await fetch(`${BASE}/bot/${bot_id}/transcript/`, {
-      headers: { "Authorization": `Token ${API_KEY}` }
+    // Get transcript using the v2 endpoint (v1 is legacy)
+    const r = await fetch(`${BASE}/bot/${bot_id}/transcript`, {
+      headers: { 
+        "Authorization": `Token ${API_KEY}`,
+        "Accept": "application/json"
+      }
     });
 
     if (!r.ok) {
