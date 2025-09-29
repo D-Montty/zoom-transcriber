@@ -4,10 +4,8 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Sales Call Transcriber</title>
-  <!-- If you already have public/style.css, this will use it -->
   <link rel="stylesheet" href="style.css"/>
   <style>
-    /* If you don't have style.css, this minimal style keeps it usable */
     *{box-sizing:border-box}
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh;margin:0;padding:24px}
     .container{max-width:900px;margin:0 auto}
@@ -16,17 +14,22 @@
     label{display:block;font-weight:600;margin-bottom:6px}
     input{width:100%;padding:12px;border:2px solid #e6e6e6;border-radius:8px;font-size:16px}
     .buttons{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
-    button{border:0;padding:12px 20px;border-radius:8px;font-weight:700;cursor:pointer}
+    button{border:0;padding:12px 20px;border-radius:8px;font-weight:700;cursor:pointer;transition:opacity 0.2s}
+    button:disabled{opacity:0.5;cursor:not-allowed}
     #startBtn{background:#667eea;color:#fff}
     #stopBtn{background:#f56565;color:#fff}
     #copyBtn{background:#48bb78;color:#fff}
+    #newSessionBtn{background:#9f7aea;color:#fff;display:none}
     .status{margin-top:12px;padding:10px;border-radius:8px;background:#bee3f8;color:#2c5282}
     .status.error{background:#fed7d7;color:#742a2a}
     .status.success{background:#c6f6d5;color:#22543d}
     #txCard{max-height:520px;overflow:auto}
     .row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
-    #tx{background:#f7f7f9;border-radius:8px;padding:16px;white-space:pre-wrap}
+    #tx{background:#f7f7f9;border-radius:8px;padding:16px;white-space:pre-wrap;min-height:100px}
     footer{color:#fff;text-align:center;margin-top:12px;opacity:.9}
+    .live-indicator{display:inline-block;width:8px;height:8px;background:#48bb78;border-radius:50%;margin-left:8px;animation:pulse 2s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+    .session-ended{opacity:0.9;font-style:italic}
   </style>
 </head>
 <body>
@@ -46,7 +49,8 @@
       <div class="buttons">
         <button id="startBtn">Start</button>
         <button id="stopBtn" disabled>Stop</button>
-        <button id="copyBtn" disabled>Copy</button>
+        <button id="copyBtn" disabled>Copy Transcript</button>
+        <button id="newSessionBtn">New Session</button>
       </div>
 
       <div id="status" class="status"></div>
@@ -54,7 +58,7 @@
 
     <div class="card" id="txCard" style="display:none;">
       <div class="row">
-        <h2>Live Transcript</h2>
+        <h2 id="txTitle">Live Transcript</h2>
         <span id="duration"></span>
       </div>
       <pre id="tx">Waiting for audio…</pre>
@@ -69,12 +73,14 @@
     const startBtn = document.getElementById('startBtn');
     const stopBtn  = document.getElementById('stopBtn');
     const copyBtn  = document.getElementById('copyBtn');
+    const newSessionBtn = document.getElementById('newSessionBtn');
     const statusEl = document.getElementById('status');
     const txEl     = document.getElementById('tx');
     const txCard   = document.getElementById('txCard');
+    const txTitle  = document.getElementById('txTitle');
     const durEl    = document.getElementById('duration');
 
-    let botId = null, poll = null, t0 = null, timer = null;
+    let botId = null, poll = null, t0 = null, timer = null, sessionEnded = false;
 
     function setStatus(msg, type="info"){
       console.log(`[STATUS:${type}]`, msg);
@@ -83,10 +89,15 @@
       if(type!=="error") setTimeout(()=>{ if (statusEl.textContent === msg) statusEl.textContent = ""; }, 5000);
     }
 
-    function setButtons({starting=false, running=false}){
-      startBtn.disabled = starting || running;
+    function setButtons({starting=false, running=false, hasFinalTranscript=false}){
+      startBtn.disabled = starting || running || hasFinalTranscript;
       stopBtn.disabled  = !running;
-      copyBtn.disabled  = !running;
+      copyBtn.disabled  = !hasFinalTranscript && !running;
+      
+      // Show "New Session" button only when session has ended and we have a transcript
+      if(hasFinalTranscript){
+        newSessionBtn.style.display = 'inline-block';
+      }
     }
 
     async function start(){
@@ -118,9 +129,14 @@
         }
 
         botId = data.bot_id;
+        sessionEnded = false;
         txCard.style.display = "block";
         txEl.textContent = "Waiting for audio…";
+        txEl.classList.remove('session-ended');
+        txTitle.innerHTML = 'Live Transcript <span class="live-indicator"></span>';
         setButtons({running:true});
+        setStatus("Recording started! Bot joined the meeting.", "success");
+        
         t0 = Date.now();
         timer = setInterval(()=>{
           const s = Math.floor((Date.now()-t0)/1000);
@@ -131,15 +147,15 @@
 
         // Poll every 3s — try live cache first, then REST fallback
         poll = setInterval(async ()=>{
-          if (!botId) return;
+          if (!botId || sessionEnded) return;
 
           try {
             // 1) Live via webhook cache
             const live = await fetch(`/api/live?bot_id=${botId}`);
             if (live.ok) {
               const ld = await live.json();
-              if (ld.hasData && typeof ld.transcript === "string") {
-                txEl.textContent = ld.transcript || "(no speech yet)";
+              if (ld.hasData && typeof ld.transcript === "string" && ld.transcript.trim()) {
+                txEl.textContent = ld.transcript;
                 txEl.scrollTop = txEl.scrollHeight;
                 return; // got live text; skip REST this tick
               }
@@ -172,8 +188,8 @@
 
     async function stop(){
       if(!botId) return;
-      setStatus("Stopping…");
-      setButtons({starting:false, running:false});
+      setStatus("Stopping recording...");
+      
       try{
         const r = await fetch("/api/stop", {
           method:"POST",
@@ -183,21 +199,45 @@
         const data = await r.json().catch(()=> ({}));
         console.log("STOP response:", r.status, data);
 
+        // Stop polling and timers immediately
+        sessionEnded = true;
+        if(poll){ clearInterval(poll); poll = null; }
+        if(timer){ clearInterval(timer); timer = null; }
+        
+        // Update UI to show session ended
+        txTitle.textContent = 'Final Transcript';
+        txEl.classList.add('session-ended');
+
         if(!r.ok){
           setStatus(`Stop error (${r.status}): ${data?.error || data?.details || "Failed to stop"}`, "error");
-        } else if (typeof data.transcript === "string" && data.transcript.trim()){
+          setButtons({starting:false, running:false, hasFinalTranscript: false});
+          return;
+        }
+        
+        // Check if we got a transcript immediately
+        if (typeof data.transcript === "string" && data.transcript.trim()){
           txEl.textContent = data.transcript;
-          setStatus("Transcript ready to copy ✅", "success");
+          setButtons({starting:false, running:false, hasFinalTranscript: true});
+          setStatus("✅ Recording stopped! Transcript ready to copy.", "success");
         } else {
           // Keep polling until the final transcript appears
-          setStatus("Final transcript is processing…");
+          setStatus("Processing final transcript...");
+          setButtons({starting:false, running:false, hasFinalTranscript: false});
+          
           const pollUntilReady = async () => {
-            const rr = await fetch(`/api/transcript?bot_id=${botId}`);
-            const td = await rr.json().catch(()=> ({}));
-            if (td.transcript && td.transcript.trim()) {
-              txEl.textContent = td.transcript;
-              setStatus("Transcript ready to copy ✅", "success");
-            } else {
+            try {
+              const rr = await fetch(`/api/transcript?bot_id=${botId}`);
+              const td = await rr.json().catch(()=> ({}));
+              if (td.transcript && td.transcript.trim()) {
+                txEl.textContent = td.transcript;
+                setButtons({starting:false, running:false, hasFinalTranscript: true});
+                setStatus("✅ Recording stopped! Transcript ready to copy.", "success");
+              } else {
+                // Keep trying every 5 seconds
+                setTimeout(pollUntilReady, 5000);
+              }
+            } catch(e) {
+              console.error("Polling final transcript error:", e);
               setTimeout(pollUntilReady, 5000);
             }
           };
@@ -206,32 +246,61 @@
       }catch(e){
         console.error("Stop() crashed:", e);
         setStatus(`Unexpected error: ${e.message}`, "error");
-      }finally{
-        botId = null;
+        sessionEnded = true;
         if(poll){ clearInterval(poll); poll = null; }
-        if(timer){ clearInterval(timer); timer = null; durEl.textContent=""; }
-        setButtons({starting:false, running:false});
+        if(timer){ clearInterval(timer); timer = null; }
+        setButtons({starting:false, running:false, hasFinalTranscript: false});
       }
     }
 
     function copy(){
       const text = txEl.textContent || "";
-      if(!text.trim()){ setStatus("Nothing to copy", "error"); return; }
+      if(!text.trim() || text === "Waiting for audio…"){ 
+        setStatus("Nothing to copy yet", "error"); 
+        return; 
+      }
       navigator.clipboard.writeText(text).then(
-        ()=> setStatus("Transcript copied!", "success"),
-        ()=> setStatus("Copy failed", "error")
+        ()=> setStatus("✅ Transcript copied to clipboard!", "success"),
+        ()=> setStatus("Copy failed - please select and copy manually", "error")
       );
+    }
+
+    function newSession(){
+      // Reset everything for a new session
+      botId = null;
+      sessionEnded = false;
+      txCard.style.display = 'none';
+      txEl.textContent = 'Waiting for audio…';
+      txEl.classList.remove('session-ended');
+      durEl.textContent = '';
+      txTitle.textContent = 'Live Transcript';
+      newSessionBtn.style.display = 'none';
+      setButtons({starting:false, running:false, hasFinalTranscript: false});
+      setStatus("");
     }
 
     startBtn.onclick = start;
     stopBtn.onclick  = stop;
     copyBtn.onclick  = copy;
+    newSessionBtn.onclick = newSession;
 
     // Keyboard shortcuts
     document.addEventListener("keydown", (e) => {
-      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); if(!startBtn.disabled) start(); }
-      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="x"){ e.preventDefault(); if(!stopBtn.disabled)  stop(); }
-      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="c"){ e.preventDefault(); if(!copyBtn.disabled)  copy(); }
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ 
+        e.preventDefault(); 
+        if(!startBtn.disabled) start(); 
+      }
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="x"){ 
+        e.preventDefault(); 
+        if(!stopBtn.disabled) stop(); 
+      }
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="c" && copyBtn.offsetParent !== null){ 
+        // Only trigger if copy button is visible
+        if(!copyBtn.disabled){
+          e.preventDefault();
+          copy();
+        }
+      }
     });
   </script>
 </body>
