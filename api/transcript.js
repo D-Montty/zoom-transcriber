@@ -1,4 +1,4 @@
-// api/transcript.js
+// api/transcript.js - UPDATED for new Recall.ai API
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -17,80 +17,82 @@ export default async function handler(req, res) {
     const API_KEY = process.env.RECALL_API_KEY;
     const BASE = `https://${REGION}.recall.ai/api/v1`;
 
-    console.log(`[TRANSCRIPT] Fetching transcript for bot: ${bot_id}`);
+    console.log(`[TRANSCRIPT] Fetching bot info for: ${bot_id}`);
 
-    // Get bot state
-    const s = await fetch(`${BASE}/bot/${bot_id}`, {
-      headers: { "Authorization": `Token ${API_KEY}` }
-    });
-    
-    const botInfo = s.ok ? await s.json() : {};
-    const state = botInfo.state || botInfo.status || "";
-    
-    console.log(`[TRANSCRIPT] Bot state: ${state}`);
-
-    // Get transcript using the v2 endpoint (v1 is legacy)
-    const r = await fetch(`${BASE}/bot/${bot_id}/transcript`, {
+    // Step 1: Get bot info (new API endpoint)
+    const botResp = await fetch(`${BASE}/bot/${bot_id}`, {
       headers: { 
         "Authorization": `Token ${API_KEY}`,
         "Accept": "application/json"
       }
     });
-
-    if (!r.ok) {
-      const text = await r.text();
-      console.error(`[TRANSCRIPT] API error (${r.status}):`, text);
-      return res.status(r.status).json({ 
-        error: "Failed to fetch transcript", 
-        details: text, 
-        state,
-        note: state === "done" ? "Bot finished but transcript may not be ready yet" : "Bot still in progress"
+    
+    if (!botResp.ok) {
+      const text = await botResp.text();
+      console.error(`[TRANSCRIPT] Bot fetch error (${botResp.status}):`, text);
+      return res.status(botResp.status).json({ 
+        error: "Failed to fetch bot info", 
+        details: text
       });
     }
 
-    const data = await r.json();
-    console.log(`[TRANSCRIPT] Response type:`, Array.isArray(data) ? `array (${data.length} items)` : typeof data);
+    const botData = await botResp.json();
+    const state = botData.state || botData.status || "unknown";
+    
+    console.log(`[TRANSCRIPT] Bot state: ${state}`);
+    console.log(`[TRANSCRIPT] Recordings count:`, botData.recordings?.length || 0);
 
-    // Flexible parsing
-    const flatten = (payload) => {
-      if (Array.isArray(payload)) {
-        if (payload.length === 0) {
-          console.log('[TRANSCRIPT] Empty array received');
-          return "";
-        }
-        
-        const text = payload.map(block => {
-          const line = (block.words || []).map(w => w.text).join(" ");
-          return block.speaker ? `${block.speaker}: ${line}` : line;
-        }).join("\n");
-        
-        console.log(`[TRANSCRIPT] Parsed ${payload.length} blocks into ${text.length} chars`);
-        return text;
-      }
-      
-      if (payload?.utterances) {
-        console.log(`[TRANSCRIPT] Found ${payload.utterances.length} utterances`);
-        return payload.utterances.map(u =>
-          (u.speaker ? `${u.speaker}: ${u.text}` : u.text)
-        ).join("\n");
-      }
-      
-      console.log('[TRANSCRIPT] Unknown data structure:', Object.keys(payload));
-      return "";
-    };
+    // Step 2: Extract download URL from recordings
+    const recording = botData.recordings?.[0];
+    const transcriptData = recording?.media_shortcuts?.transcript;
+    const downloadUrl = transcriptData?.data?.download_url;
 
-    const text = flatten(data);
-    const ready = !!text && text.trim().length > 0;
+    if (!downloadUrl) {
+      console.log(`[TRANSCRIPT] No download URL yet. State: ${state}`);
+      return res.status(200).json({
+        success: true,
+        state,
+        ready: false,
+        transcript: "",
+        note: "Transcript not ready yet - still processing"
+      });
+    }
 
-    console.log(`[TRANSCRIPT] Final: ${text.length} chars, ready: ${ready}`);
+    console.log(`[TRANSCRIPT] Download URL found, fetching transcript...`);
+
+    // Step 3: Download the actual transcript
+    const transcriptResp = await fetch(downloadUrl);
+    
+    if (!transcriptResp.ok) {
+      console.error(`[TRANSCRIPT] Download error (${transcriptResp.status})`);
+      return res.status(200).json({
+        success: true,
+        state,
+        ready: false,
+        transcript: "",
+        note: "Transcript URL exists but download failed"
+      });
+    }
+
+    const transcriptArray = await transcriptResp.json();
+    console.log(`[TRANSCRIPT] Downloaded ${transcriptArray.length} transcript blocks`);
+
+    // Step 4: Format the transcript
+    const formattedText = transcriptArray.map(block => {
+      const participant = block.participant?.name || "Unknown Speaker";
+      const words = block.words?.map(w => w.text).join(" ") || "";
+      return `${participant}: ${words}`;
+    }).join("\n");
+
+    console.log(`[TRANSCRIPT] Final transcript: ${formattedText.length} chars`);
 
     return res.status(200).json({
       success: true,
       state,
-      ready,
-      transcript: text || "",
-      char_count: text.length,
-      note: ready ? "Transcript available" : (state === "done" ? "Processing complete but no transcript yet" : "Still recording")
+      ready: true,
+      transcript: formattedText,
+      char_count: formattedText.length,
+      note: "Transcript ready"
     });
 
   } catch (err) {
