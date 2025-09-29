@@ -39,12 +39,21 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true }); // Still return 200 to avoid retries
     }
 
-    // Log webhook received
-    const event = body.event || body.type || "unknown";
-    const botId = body?.bot_id || body?.bot?.id || body?.id || body?.data?.bot_id;
-    
-    console.log(`[WEBHOOK] Received event: ${event} for bot: ${botId}`);
+    // Log the FULL webhook payload structure to debug
+    console.log(`[WEBHOOK] ===== RAW WEBHOOK RECEIVED =====`);
     console.log(`[WEBHOOK] Full payload:`, JSON.stringify(body, null, 2));
+    
+    // Try multiple ways to extract bot_id
+    const botId = 
+      body?.bot_id || 
+      body?.bot?.id || 
+      body?.id || 
+      body?.data?.bot_id ||
+      body?.data?.bot?.id;
+    
+    const event = body.event || body.type || "unknown";
+    
+    console.log(`[WEBHOOK] Extracted - Event: ${event}, BotId: ${botId}`);
 
     // Extract text from various possible structures
     const d = body.data || body;
