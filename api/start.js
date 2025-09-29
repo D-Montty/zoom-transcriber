@@ -45,7 +45,11 @@ export default async function handler(req, res) {
       name: display_name || "Sales Notetaker",
       recording_config: {
         transcript: {
-          provider: { recallai_streaming: {} }
+          provider: { 
+            recallai_streaming: {
+              mode: "prioritize_low_latency"  // 1-3 second delay instead of 3-10 minutes
+            }
+          }
         },
         ...(webhookUrl ? {
           realtime_endpoints: [
