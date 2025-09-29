@@ -1,10 +1,14 @@
 // api/recall/transcript.js
-// Simple in-memory cache (per serverless instance). Good enough for MVP.
-// For production, use Redis/Upstash instead.
+// Webhook endpoint that receives real-time transcript from Recall.ai
+
 const liveCache = globalThis.__liveCache || (globalThis.__liveCache = new Map());
 
 function wordsToLine(words = []) {
-  try { return words.map(w => w.text).join(" "); } catch { return ""; }
+  try { 
+    return words.map(w => w.text).join(" "); 
+  } catch { 
+    return ""; 
+  }
 }
 
 export default async function handler(req, res) {
@@ -12,43 +16,73 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (req.method !== "POST") {
+    console.log(`[WEBHOOK] Invalid method: ${req.method}`);
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
   try {
-    // Parse raw body safely (Recall posts JSON)
+    // Parse raw body
     let raw = "";
     await new Promise(resolve => {
       req.on("data", c => (raw += c));
       req.on("end", resolve);
     });
+
     let body = {};
-    try { body = JSON.parse(raw || "{}"); } catch {}
+    try { 
+      body = JSON.parse(raw || "{}"); 
+    } catch (e) {
+      console.error('[WEBHOOK] Failed to parse JSON:', e.message);
+      return res.status(200).json({ ok: true }); // Still return 200 to avoid retries
+    }
 
-    // Event shapes may vary slightly; extract essentials
-    const event = body.event || body.type || "";
+    // Log webhook received
+    const event = body.event || body.type || "unknown";
     const botId = body?.bot_id || body?.bot?.id || body?.id || body?.data?.bot_id;
+    
+    console.log(`[WEBHOOK] Received event: ${event} for bot: ${botId}`);
+    console.log(`[WEBHOOK] Full payload:`, JSON.stringify(body, null, 2));
 
-    // Words/text can appear in different places depending on partial/final
+    // Extract text from various possible structures
     const d = body.data || body;
     const line =
       wordsToLine(d?.words) ||
       wordsToLine(d?.segment?.words) ||
-      d?.text || "";
+      d?.text || 
+      "";
 
-    if (botId) {
+    if (botId && line && line.trim()) {
       const entry = liveCache.get(botId) || { lines: [], text: "", updated: 0 };
-      if (line && line.trim()) {
-        entry.lines.push(line.trim());
-        entry.text = entry.lines.join("\n");
-        entry.updated = Date.now();
-        liveCache.set(botId, entry);
-      }
+      
+      // Add speaker if available
+      const speaker = d?.speaker || d?.segment?.speaker || "";
+      const formattedLine = speaker ? `${speaker}: ${line.trim()}` : line.trim();
+      
+      entry.lines.push(formattedLine);
+      entry.text = entry.lines.join("\n");
+      entry.updated = Date.now();
+      
+      liveCache.set(botId, entry);
+      
+      console.log(`[WEBHOOK] Updated cache for bot ${botId}: ${entry.lines.length} lines, ${entry.text.length} chars`);
+    } else {
+      console.log(`[WEBHOOK] No usable text in webhook. BotId: ${botId}, Line: "${line}"`);
     }
 
-    // 200 OK so Recall stops retrying
-    return res.status(200).json({ ok: true, event, bot_id: botId });
+    // Always return 200 OK so Recall stops retrying
+    return res.status(200).json({ 
+      ok: true, 
+      event, 
+      bot_id: botId,
+      processed: !!(botId && line && line.trim())
+    });
+
   } catch (err) {
-    return res.status(200).json({ ok: true }); // still 200 to avoid retries
+    console.error(`[WEBHOOK] Error processing webhook:`, err);
+    // Still return 200 to avoid retries
+    return res.status(200).json({ ok: true, error: err.message });
   }
 }
