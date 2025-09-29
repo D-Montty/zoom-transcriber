@@ -60,9 +60,10 @@ export default async function handler(req, res) {
     };
 
     console.log(`[START] Creating bot for meeting: ${zoom_url}`);
+    console.log(`[START] Webhook URL: ${webhookUrl || 'NONE - Live transcript disabled'}`);
     console.log(`[START] Payload:`, JSON.stringify(payload, null, 2));
 
-    const resp = await fetch(`${BASE}/bot/`, {
+    const resp = await fetch(`${BASE}/bot`, {
       method: "POST",
       headers: {
         "Authorization": `Token ${API_KEY}`,
