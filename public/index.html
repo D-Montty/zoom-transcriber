@@ -16,27 +16,32 @@
     .buttons{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
     button{border:0;padding:12px 20px;border-radius:8px;font-weight:700;cursor:pointer;transition:opacity 0.2s}
     button:disabled{opacity:0.5;cursor:not-allowed}
+    button:hover:not(:disabled){opacity:0.9}
     #startBtn{background:#667eea;color:#fff}
     #stopBtn{background:#f56565;color:#fff}
     #copyBtn{background:#48bb78;color:#fff}
+    #refreshBtn{background:#ed8936;color:#fff}
     #newSessionBtn{background:#9f7aea;color:#fff;display:none}
-    .status{margin-top:12px;padding:10px;border-radius:8px;background:#bee3f8;color:#2c5282}
+    .status{margin-top:12px;padding:10px;border-radius:8px;background:#bee3f8;color:#2c5282;font-size:14px}
     .status.error{background:#fed7d7;color:#742a2a}
     .status.success{background:#c6f6d5;color:#22543d}
+    .status.warning{background:#feebc8;color:#7c2d12}
+    .status.recording{background:#f0e7ff;color:#5b21b6;border:2px solid #9f7aea}
     #txCard{max-height:520px;overflow:auto}
-    .row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
-    #tx{background:#f7f7f9;border-radius:8px;padding:16px;white-space:pre-wrap;min-height:100px}
-    footer{color:#fff;text-align:center;margin-top:12px;opacity:.9}
-    .live-indicator{display:inline-block;width:8px;height:8px;background:#48bb78;border-radius:50%;margin-left:8px;animation:pulse 2s infinite}
+    .row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px}
+    #tx{background:#f7f7f9;border-radius:8px;padding:16px;white-space:pre-wrap;min-height:150px;font-size:14px;line-height:1.6;border:1px solid #e5e5e5}
+    footer{color:#fff;text-align:center;margin-top:12px;opacity:.9;font-size:14px}
+    .recording-indicator{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;background:#fee;border-radius:20px;color:#991b1b;font-weight:600;font-size:13px;border:2px solid #fca5a5}
+    .rec-dot{width:8px;height:8px;background:#dc2626;border-radius:50%;animation:pulse 1.5s infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-    .session-ended{opacity:0.9;font-style:italic}
+    .timer{font-family:monospace;font-size:18px;font-weight:700;color:#667eea}
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <h1>📝 Sales Call Transcriber</h1>
-      <p>Paste a Zoom link, start, stop, and copy the transcript.</p>
+      <p>Record your Zoom call and get the transcript when finished.</p>
     </header>
 
     <div class="card">
@@ -47,25 +52,33 @@
       <input id="zoom" placeholder="https://zoom.us/j/123..."/>
 
       <div class="buttons">
-        <button id="startBtn">Start</button>
-        <button id="stopBtn" disabled>Stop</button>
-        <button id="copyBtn" disabled>Copy Transcript</button>
+        <button id="startBtn">Start Recording</button>
+        <button id="stopBtn" disabled>Stop Recording</button>
+        <button id="copyBtn" style="display:none">Copy Transcript</button>
+        <button id="refreshBtn" style="display:none">Refresh Transcript</button>
         <button id="newSessionBtn">New Session</button>
       </div>
 
-      <div id="status" class="status"></div>
+      <div id="status" class="status" style="display:none"></div>
+      
+      <div id="recordingStatus" style="display:none;margin-top:12px;text-align:center">
+        <div class="recording-indicator">
+          <span class="rec-dot"></span>
+          <span>RECORDING</span>
+        </div>
+        <div class="timer" id="timer" style="margin-top:8px">00:00</div>
+      </div>
     </div>
 
     <div class="card" id="txCard" style="display:none;">
       <div class="row">
-        <h2 id="txTitle">Live Transcript</h2>
-        <span id="duration"></span>
+        <h2>Transcript</h2>
       </div>
-      <pre id="tx">Waiting for audio…</pre>
+      <pre id="tx">No transcript yet.</pre>
     </div>
 
     <footer>
-      💡 If Zoom shows a participant trying to join, please **Admit** it.
+      💡 If Zoom shows a participant trying to join, please click <strong>Admit</strong>.
     </footer>
   </div>
 
@@ -73,31 +86,35 @@
     const startBtn = document.getElementById('startBtn');
     const stopBtn  = document.getElementById('stopBtn');
     const copyBtn  = document.getElementById('copyBtn');
+    const refreshBtn = document.getElementById('refreshBtn');
     const newSessionBtn = document.getElementById('newSessionBtn');
     const statusEl = document.getElementById('status');
     const txEl     = document.getElementById('tx');
     const txCard   = document.getElementById('txCard');
-    const txTitle  = document.getElementById('txTitle');
-    const durEl    = document.getElementById('duration');
+    const timerEl  = document.getElementById('timer');
+    const recordingStatus = document.getElementById('recordingStatus');
 
-    let botId = null, poll = null, t0 = null, timer = null, sessionEnded = false;
+    let botId = null, timer = null, t0 = null;
 
     function setStatus(msg, type="info"){
       console.log(`[STATUS:${type}]`, msg);
       statusEl.textContent = msg;
       statusEl.className = `status ${type}`;
-      if(type!=="error") setTimeout(()=>{ if (statusEl.textContent === msg) statusEl.textContent = ""; }, 5000);
+      statusEl.style.display = msg ? 'block' : 'none';
+      if(type!=="error" && type!=="warning" && type!=="recording") {
+        setTimeout(()=>{ 
+          if (statusEl.textContent === msg) statusEl.style.display = 'none';
+        }, 5000);
+      }
     }
 
     function setButtons({starting=false, running=false, hasFinalTranscript=false}){
       startBtn.disabled = starting || running || hasFinalTranscript;
       stopBtn.disabled  = !running;
-      copyBtn.disabled  = !hasFinalTranscript && !running;
-      
-      // Show "New Session" button only when session has ended and we have a transcript
-      if(hasFinalTranscript){
-        newSessionBtn.style.display = 'inline-block';
-      }
+      copyBtn.style.display = hasFinalTranscript ? 'inline-block' : 'none';
+      refreshBtn.style.display = hasFinalTranscript ? 'inline-block' : 'none';
+      newSessionBtn.style.display = hasFinalTranscript ? 'inline-block' : 'none';
+      recordingStatus.style.display = running ? 'block' : 'none';
     }
 
     async function start(){
@@ -106,14 +123,14 @@
         const zoom = document.getElementById('zoom').value.trim();
         if(!zoom){ setStatus("Please paste a Zoom meeting link", "error"); return; }
 
-        setButtons({starting:true, running:false});
-        setStatus("Starting bot… admit it in Zoom if prompted.");
+        setButtons({starting:true});
+        setStatus("Starting bot... this may take 10-20 seconds.");
         console.log("POST /api/start", { zoom_url: zoom, display_name: name });
 
         const r = await fetch("/api/start", {
           method:"POST",
           headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ zoom_url: zoom, display_name: name })
+          body: JSON.stringify({ zoom_url: zoom, display_name: name || "Sales Notetaker" })
         });
 
         const rawText = await r.text();
@@ -124,184 +141,166 @@
         if(!r.ok){
           const msg = data?.error || data?.details || data?.message || rawText || "Failed to start";
           setStatus(`Start error (${r.status}): ${msg}`, "error");
-          setButtons({starting:false, running:false});
+          setButtons({});
           return;
         }
 
         botId = data.bot_id;
-        sessionEnded = false;
-        txCard.style.display = "block";
-        txEl.textContent = "Waiting for audio…";
-        txEl.classList.remove('session-ended');
-        txTitle.innerHTML = 'Live Transcript <span class="live-indicator"></span>';
         setButtons({running:true});
-        setStatus("Recording started! Bot joined the meeting.", "success");
+        setStatus("Bot joined the meeting. Recording in progress...", "recording");
         
+        // Start timer
         t0 = Date.now();
         timer = setInterval(()=>{
           const s = Math.floor((Date.now()-t0)/1000);
           const m = String(Math.floor(s/60)).padStart(2,"0");
           const ss = String(s%60).padStart(2,"0");
-          durEl.textContent = `Duration ${m}:${ss}`;
+          timerEl.textContent = `${m}:${ss}`;
         }, 1000);
-
-        // Poll every 3s — try live cache first, then REST fallback
-        poll = setInterval(async ()=>{
-          if (!botId || sessionEnded) return;
-
-          try {
-            // 1) Live via webhook cache
-            const live = await fetch(`/api/live?bot_id=${botId}`);
-            if (live.ok) {
-              const ld = await live.json();
-              if (ld.hasData && typeof ld.transcript === "string" && ld.transcript.trim()) {
-                txEl.textContent = ld.transcript;
-                txEl.scrollTop = txEl.scrollHeight;
-                return; // got live text; skip REST this tick
-              }
-            }
-
-            // 2) Fallback to REST transcript (may be empty until post-call)
-            const rest = await fetch(`/api/transcript?bot_id=${botId}`);
-            if (rest.ok) {
-              const rd = await rest.json();
-              if (rd.transcript && rd.transcript.trim()) {
-                txEl.textContent = rd.transcript;
-                txEl.scrollTop = txEl.scrollHeight;
-              } else {
-                console.debug("Transcript not ready yet (REST). State:", rd?.state);
-              }
-            } else {
-              console.warn("REST transcript error", rest.status);
-            }
-          } catch (e) {
-            console.error("Polling error:", e);
-          }
-        }, 3000);
 
       }catch(e){
         console.error("Start() crashed:", e);
         setStatus(`Unexpected error: ${e.message}`, "error");
-        setButtons({starting:false, running:false});
+        setButtons({});
       }
     }
 
     async function stop(){
       if(!botId) return;
-      setStatus("Stopping recording...");
+      
+      const currentBotId = botId;
+      setStatus("Stopping recording and fetching transcript...");
+      setButtons({});
+      
+      // Stop timer
+      if(timer){ clearInterval(timer); timer = null; }
       
       try{
         const r = await fetch("/api/stop", {
           method:"POST",
           headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ bot_id: botId })
+          body: JSON.stringify({ bot_id: currentBotId })
         });
+        
         const data = await r.json().catch(()=> ({}));
         console.log("STOP response:", r.status, data);
 
-        // Stop polling and timers immediately
-        sessionEnded = true;
-        if(poll){ clearInterval(poll); poll = null; }
-        if(timer){ clearInterval(timer); timer = null; }
-        
-        // Update UI to show session ended
-        txTitle.textContent = 'Final Transcript';
-        txEl.classList.add('session-ended');
-
         if(!r.ok){
-          setStatus(`Stop error (${r.status}): ${data?.error || data?.details || "Failed to stop"}`, "error");
-          setButtons({starting:false, running:false, hasFinalTranscript: false});
+          const msg = data?.error || data?.details || "Failed to stop";
+          setStatus(`Stop error (${r.status}): ${msg}`, "error");
           return;
         }
         
-        // Check if we got a transcript immediately
-        if (typeof data.transcript === "string" && data.transcript.trim()){
+        // Show transcript card
+        txCard.style.display = "block";
+        
+        // Check if we got transcript immediately
+        if (data.transcript && data.transcript.trim()){
           txEl.textContent = data.transcript;
-          setButtons({starting:false, running:false, hasFinalTranscript: true});
-          setStatus("✅ Recording stopped! Transcript ready to copy.", "success");
-        } else {
-          // Keep polling until the final transcript appears
-          setStatus("Processing final transcript...");
-          setButtons({starting:false, running:false, hasFinalTranscript: false});
-          
-          const pollUntilReady = async () => {
-            try {
-              const rr = await fetch(`/api/transcript?bot_id=${botId}`);
-              const td = await rr.json().catch(()=> ({}));
-              if (td.transcript && td.transcript.trim()) {
-                txEl.textContent = td.transcript;
-                setButtons({starting:false, running:false, hasFinalTranscript: true});
-                setStatus("✅ Recording stopped! Transcript ready to copy.", "success");
-              } else {
-                // Keep trying every 5 seconds
-                setTimeout(pollUntilReady, 5000);
-              }
-            } catch(e) {
-              console.error("Polling final transcript error:", e);
-              setTimeout(pollUntilReady, 5000);
-            }
-          };
-          pollUntilReady();
+          setButtons({hasFinalTranscript:true});
+          setStatus("Recording stopped. Transcript ready!", "success");
+          return;
         }
+        
+        // No transcript yet - poll for it
+        setStatus("Processing final transcript... this may take 30-60 seconds.", "warning");
+        txEl.textContent = "Processing transcript...\n\nThis usually takes 30-60 seconds after the call ends.\n\nClick 'Refresh Transcript' if it takes longer.";
+        setButtons({hasFinalTranscript:true}); // Enable buttons so they can refresh
+        
+        let attempts = 0;
+        const maxAttempts = 20;
+        
+        const pollFinal = async () => {
+          attempts++;
+          console.log(`Polling attempt ${attempts}/${maxAttempts}...`);
+          
+          try {
+            const rr = await fetch(`/api/transcript?bot_id=${currentBotId}`);
+            const td = await rr.json().catch(()=> ({}));
+            console.log(`Transcript attempt ${attempts}:`, td);
+            
+            if (td.transcript && td.transcript.trim()) {
+              txEl.textContent = td.transcript;
+              setStatus("Transcript ready! Click Copy to copy it.", "success");
+              return;
+            }
+            
+            if (attempts < maxAttempts) {
+              setTimeout(pollFinal, 5000);
+            } else {
+              setStatus("Transcript is taking longer than expected. Click Refresh to try again.", "warning");
+            }
+          } catch(e) {
+            console.error("Polling error:", e);
+            if (attempts < maxAttempts) {
+              setTimeout(pollFinal, 5000);
+            }
+          }
+        };
+        
+        pollFinal();
+        
       }catch(e){
         console.error("Stop() crashed:", e);
         setStatus(`Unexpected error: ${e.message}`, "error");
-        sessionEnded = true;
-        if(poll){ clearInterval(poll); poll = null; }
-        if(timer){ clearInterval(timer); timer = null; }
-        setButtons({starting:false, running:false, hasFinalTranscript: false});
+      }
+    }
+
+    async function refreshTranscript(){
+      if(!botId) return;
+      setStatus("Refreshing transcript...");
+      
+      try {
+        const r = await fetch(`/api/transcript?bot_id=${botId}`);
+        const data = await r.json().catch(()=> ({}));
+        console.log('Refresh response:', data);
+        
+        if (data.transcript && data.transcript.trim()) {
+          txEl.textContent = data.transcript;
+          setStatus("Transcript refreshed!", "success");
+        } else {
+          setStatus("Transcript still not ready. Wait a bit longer and try again.", "warning");
+        }
+      } catch(e) {
+        setStatus("Error refreshing transcript", "error");
       }
     }
 
     function copy(){
       const text = txEl.textContent || "";
-      if(!text.trim() || text === "Waiting for audio…"){ 
+      if(!text.trim() || text.includes("Processing transcript") || text === "No transcript yet."){ 
         setStatus("Nothing to copy yet", "error"); 
         return; 
       }
+      
       navigator.clipboard.writeText(text).then(
-        ()=> setStatus("✅ Transcript copied to clipboard!", "success"),
-        ()=> setStatus("Copy failed - please select and copy manually", "error")
+        ()=> setStatus("Transcript copied to clipboard!", "success"),
+        (err)=> {
+          setStatus("Copy failed - please select and copy manually", "error");
+          // Fallback: select the text
+          const range = document.createRange();
+          range.selectNodeContents(txEl);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
       );
     }
 
     function newSession(){
-      // Reset everything for a new session
       botId = null;
-      sessionEnded = false;
       txCard.style.display = 'none';
-      txEl.textContent = 'Waiting for audio…';
-      txEl.classList.remove('session-ended');
-      durEl.textContent = '';
-      txTitle.textContent = 'Live Transcript';
-      newSessionBtn.style.display = 'none';
-      setButtons({starting:false, running:false, hasFinalTranscript: false});
+      txEl.textContent = 'No transcript yet.';
+      timerEl.textContent = '00:00';
+      setButtons({});
       setStatus("");
     }
 
     startBtn.onclick = start;
     stopBtn.onclick  = stop;
     copyBtn.onclick  = copy;
+    refreshBtn.onclick = refreshTranscript;
     newSessionBtn.onclick = newSession;
-
-    // Keyboard shortcuts
-    document.addEventListener("keydown", (e) => {
-      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ 
-        e.preventDefault(); 
-        if(!startBtn.disabled) start(); 
-      }
-      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="x"){ 
-        e.preventDefault(); 
-        if(!stopBtn.disabled) stop(); 
-      }
-      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="c" && copyBtn.offsetParent !== null){ 
-        // Only trigger if copy button is visible
-        if(!copyBtn.disabled){
-          e.preventDefault();
-          copy();
-        }
-      }
-    });
   </script>
 </body>
 </html>
